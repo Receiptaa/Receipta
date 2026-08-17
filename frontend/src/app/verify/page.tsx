@@ -8,6 +8,21 @@ const stroopsToXLM = (stroops: number): number => {
   return stroops / 10000000;
 };
 
+/**
+ * Allow-list: receipt IDs must be exactly 64 lowercase hex characters.
+ * Rejects path-traversal sequences, slashes, dots, and any non-hex input
+ * before a network request is ever made.
+ */
+const RECEIPT_ID_RE = /^[0-9a-f]{64}$/i;
+const RECEIPT_ID_MAX_LEN = 128; // hard upper bound; valid IDs are 64 chars
+
+function validateReceiptId(id: string): string | null {
+  if (!id || id.trim() === '') return 'Invalid receipt ID';
+  if (id.length > RECEIPT_ID_MAX_LEN) return 'Invalid receipt ID';
+  if (!RECEIPT_ID_RE.test(id)) return 'Invalid receipt ID';
+  return null; // valid
+}
+
 function VerifyContent() {
   const searchParams = useSearchParams();
   const [receiptId, setReceiptId] = useState('');
@@ -16,9 +31,16 @@ function VerifyContent() {
   const [error, setError] = useState('');
 
   // Pre-populate and auto-verify when arriving from the pay page via ?id=
+  // Validate the query-param before touching state so a malicious link
+  // cannot inject path-traversal characters or an oversized string.
   useEffect(() => {
     const idFromQuery = searchParams.get('id');
     if (idFromQuery) {
+      const validationError = validateReceiptId(idFromQuery);
+      if (validationError) {
+        setError(validationError);
+        return;
+      }
       setReceiptId(idFromQuery);
     }
   }, [searchParams]);
@@ -31,8 +53,9 @@ function VerifyContent() {
   }, [receiptId]);
 
   const handleVerify = async (id = receiptId) => {
-    if (!id || id.length !== 64) {
-      setError('Please enter a valid 64-character receipt ID');
+    const validationError = validateReceiptId(id);
+    if (validationError) {
+      setError(validationError);
       return;
     }
 
@@ -41,8 +64,11 @@ function VerifyContent() {
     setReceipt(null);
 
     try {
+      // encodeURIComponent ensures any residual special characters cannot
+      // influence the URL path, providing defence-in-depth even if the
+      // allow-list above is ever relaxed.
       const response = await fetch(
-        `${apiUrl}/api/receipts/${id}`
+        `${apiUrl}/api/receipts/${encodeURIComponent(id)}`
       );
 
       if (!response.ok) {

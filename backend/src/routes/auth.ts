@@ -63,7 +63,8 @@ router.post('/register', async (req, res) => {
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
-    const merchantId = `merchant_${Date.now()}`;
+    // Use a UUID so merchant IDs are non-sequential and cannot be enumerated.
+    const merchantId = crypto.randomUUID();
 
     merchants.set(email, {
       id: merchantId,

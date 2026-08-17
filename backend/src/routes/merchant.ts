@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import logger from '../logger';
+import { paymentLinks } from './payment-links';
 
 const router = Router();
 
@@ -86,6 +87,38 @@ router.get('/stats', authenticateToken, async (req: AuthRequest, res) => {
     (req.log ?? logger).error({ err: error }, 'Error fetching merchant stats');
     res.status(500).json({
       error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch statistics' },
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/merchant/payment-links/:id
+// Returns the full payment link record, but only to the owning merchant.
+// ---------------------------------------------------------------------------
+
+router.get('/payment-links/:id', authenticateToken, async (req: AuthRequest, res) => {
+  try {
+    const { id } = req.params;
+    const link = paymentLinks.get(id);
+
+    if (!link) {
+      return res.status(404).json({
+        error: { code: 'LINK_NOT_FOUND', message: 'Payment link not found' },
+      });
+    }
+
+    // Ownership check — a merchant may only read their own links.
+    if (link.merchantId !== req.merchant!.merchantId) {
+      return res.status(403).json({
+        error: { code: 'FORBIDDEN', message: 'Access denied' },
+      });
+    }
+
+    res.json({ paymentLink: link });
+  } catch (error) {
+    (req.log ?? logger).error({ err: error }, 'Error fetching merchant payment link');
+    res.status(500).json({
+      error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch payment link' },
     });
   }
 });

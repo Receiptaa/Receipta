@@ -14,6 +14,7 @@ const configLogger = pino({ name: 'config' });
 
 interface AppConfig {
   jwtSecret: string;
+  databaseUrl: string;
   nodeEnv: string;
   port: number;
   frontendUrl: string;
@@ -36,6 +37,13 @@ export function validateEnv(): AppConfig {
     errors.push(
       `JWT_SECRET is too short (${jwtSecret.length} chars). Minimum length is 32 characters.`
     );
+  }
+
+  // ── Database ───────────────────────────────────────────────────────────────
+
+  const databaseUrl = process.env.DATABASE_URL ?? '';
+  if (!databaseUrl) {
+    errors.push('DATABASE_URL is not set (e.g. postgres://user:pass@localhost:5432/receipta)');
   }
 
   // ── Stellar / contract (warn in dev, error in production) ─────────────────
@@ -78,6 +86,7 @@ export function validateEnv(): AppConfig {
 
   return {
     jwtSecret,
+    databaseUrl,
     nodeEnv,
     port,
     frontendUrl,

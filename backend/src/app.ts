@@ -5,6 +5,8 @@ import cookieParser from 'cookie-parser';
 import { initConfig } from './config';
 import logger from './logger';
 import { requestLogger } from './middleware/requestLogger';
+import { runMigrations } from './db/migrate';
+import { closePool } from './db/pool';
 
 // Validate all required environment variables before the server starts.
 // Exits with a non-zero code and a clear error if anything is missing.
@@ -80,9 +82,29 @@ app.use((err: Error, req: express.Request, res: express.Response, _next: express
 const PORT = config.port;
 
 if (require.main === module) {
-  app.listen(PORT, () => {
-    logger.info({ port: PORT }, `Receipta backend listening`);
-  });
+  runMigrations()
+    .then(() => {
+      const server = app.listen(PORT, () => {
+        logger.info({ port: PORT }, `Receipta backend listening`);
+      });
+
+      // Graceful shutdown — drain the connection pool on SIGTERM/SIGINT
+      const shutdown = async (signal: string) => {
+        logger.info({ signal }, 'Shutdown signal received');
+        server.close(async () => {
+          await closePool();
+          logger.info('Server closed and DB pool drained');
+          process.exit(0);
+        });
+      };
+
+      process.on('SIGTERM', () => shutdown('SIGTERM'));
+      process.on('SIGINT',  () => shutdown('SIGINT'));
+    })
+    .catch((err) => {
+      logger.error({ err }, 'Failed to run database migrations — aborting startup');
+      process.exit(1);
+    });
 }
 
 export default app;

@@ -1,25 +1,17 @@
 import { Router } from 'express';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import logger from '../logger';
+import { createPaymentLink, resolvePaymentLinkStatus } from '../db/paymentLinks';
 
 const router = Router();
 
-// In-memory store for demo
-const paymentLinks = new Map<string, {
-  id: string;
-  merchantId: string;
-  amount: string;
-  currency: string;
-  description: string;
-  receiverAddress: string;
-  createdAt: number;
-  expiresAt: number;
-}>();
-
-// POST /api/payment-links - Create payment link (authenticated)
+// ---------------------------------------------------------------------------
+// POST /api/payment-links
+// Create a new payment link (authenticated).
+// ---------------------------------------------------------------------------
 router.post('/', authenticateToken, async (req: AuthRequest, res) => {
   try {
-    const { amount, currency, description, receiverAddress } = req.body;
+    const { amount, currency, description, receiverAddress, merchantName } = req.body;
 
     if (!amount || !currency || !receiverAddress) {
       return res.status(400).json({
@@ -30,22 +22,20 @@ router.post('/', authenticateToken, async (req: AuthRequest, res) => {
       });
     }
 
-    const linkId = `link_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const createdAt = Date.now();
-    const expiresAt = createdAt + (24 * 60 * 60 * 1000); // 24 hours
+    const linkId    = `link_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const createdAt = new Date();
+    const expiresAt = new Date(createdAt.getTime() + 24 * 60 * 60 * 1000); // 24 hours
 
-    const paymentLink = {
-      id: linkId,
-      merchantId: req.merchant!.merchantId,
+    const paymentLink = await createPaymentLink({
+      id:              linkId,
+      merchantId:      req.merchant!.merchantId,
+      merchantName:    merchantName || '',
       amount,
       currency,
-      description: description || '',
+      description:     description || '',
       receiverAddress,
-      createdAt,
       expiresAt,
-    };
-
-    paymentLinks.set(linkId, paymentLink);
+    });
 
     res.status(201).json({
       paymentLink: {
@@ -64,11 +54,19 @@ router.post('/', authenticateToken, async (req: AuthRequest, res) => {
   }
 });
 
-// GET /api/payment-links/:id - Get payment link details
+// ---------------------------------------------------------------------------
+// GET /api/payment-links/:id  — PUBLIC endpoint (customer-facing /pay/:id)
+//
+// Returns ONLY the fields a customer needs to complete a payment.
+// Sensitive fields (merchantId, receiverAddress, createdAt) are intentionally
+// omitted to prevent merchant enumeration and data leakage.
+// ---------------------------------------------------------------------------
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const link = paymentLinks.get(id);
+
+    // resolvePaymentLinkStatus atomically marks expired links before returning
+    const link = await resolvePaymentLinkStatus(id);
 
     if (!link) {
       return res.status(404).json({
@@ -79,7 +77,7 @@ router.get('/:id', async (req, res) => {
       });
     }
 
-    if (Date.now() > link.expiresAt) {
+    if (link.status === 'expired') {
       return res.status(410).json({
         error: {
           code: 'LINK_EXPIRED',
@@ -88,7 +86,17 @@ router.get('/:id', async (req, res) => {
       });
     }
 
-    res.json({ paymentLink: link });
+    // Explicitly project only safe, customer-relevant fields.
+    const publicView = {
+      amount:       link.amount,
+      currency:     link.currency,
+      description:  link.description,
+      merchantName: link.merchantName,
+      expiresAt:    link.expiresAt,
+      status:       link.status,
+    };
+
+    res.json({ paymentLink: publicView });
   } catch (error) {
     (req.log ?? logger).error({ err: error }, 'Error fetching payment link');
     res.status(500).json({

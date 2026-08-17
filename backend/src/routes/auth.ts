@@ -4,23 +4,23 @@ import bcrypt from 'bcrypt';
 import { getConfig } from '../config';
 import logger from '../logger';
 import { validatePassword, PASSWORD_POLICY_ERROR } from '../middleware/validatePassword';
+import { createMerchant, getMerchantByEmail } from '../db/merchants';
 
 const router = Router();
 
 // Cookie configuration shared by login and register
 const COOKIE_NAME = 'auth_token';
 const COOKIE_OPTIONS = {
-  httpOnly: true,                        // inaccessible to JavaScript
-  secure: process.env.NODE_ENV === 'production', // HTTPS-only in production
-  sameSite: 'strict' as const,           // no cross-site sending
-  maxAge: 7 * 24 * 60 * 60 * 1000,      // 7 days in ms
+  httpOnly: true,                                          // inaccessible to JavaScript
+  secure: process.env.NODE_ENV === 'production',          // HTTPS-only in production
+  sameSite: 'strict' as const,                            // no cross-site sending
+  maxAge: 7 * 24 * 60 * 60 * 1000,                       // 7 days in ms
   path: '/',
 };
 
-// In-memory store for demo - replace with database in production
-const merchants = new Map<string, { id: string; email: string; passwordHash: string; publicKey: string }>();
-
-// POST /api/auth/register - Merchant registration
+// ---------------------------------------------------------------------------
+// POST /api/auth/register
+// ---------------------------------------------------------------------------
 router.post('/register', async (req, res) => {
   try {
     const { email, password, publicKey } = req.body;
@@ -39,11 +39,9 @@ router.post('/register', async (req, res) => {
     // bodies where `password` arrives as a non-string (object, array, etc.).
     const pwResult = validatePassword(password);
     if (!pwResult.valid) {
-      // Log the internal reason at debug level for ops visibility — never
-      // expose it in the response.
       (req.log ?? logger).debug(
         { reason: pwResult.reason },
-        'Registration rejected: password policy violation'
+        'Registration rejected: password policy violation',
       );
       return res.status(400).json({
         error: {
@@ -53,7 +51,9 @@ router.post('/register', async (req, res) => {
       });
     }
 
-    if (merchants.has(email)) {
+    // Check for duplicate email via the database
+    const existing = await getMerchantByEmail(email);
+    if (existing) {
       return res.status(409).json({
         error: {
           code: 'EMAIL_EXISTS',
@@ -63,22 +63,17 @@ router.post('/register', async (req, res) => {
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
-    const merchantId = `merchant_${Date.now()}`;
+    // Use a UUID so merchant IDs are non-sequential and cannot be enumerated.
+    const merchantId = crypto.randomUUID();
 
-    merchants.set(email, {
-      id: merchantId,
-      email,
-      passwordHash,
-      publicKey,
-    });
+    await createMerchant(merchantId, email, passwordHash, publicKey);
 
     const token = jwt.sign(
       { merchantId, email, publicKey },
       getConfig().jwtSecret,
-      { expiresIn: '7d' }
+      { expiresIn: '7d' },
     );
 
-    // Set the JWT as an HttpOnly cookie — never exposed to JS
     res.cookie(COOKIE_NAME, token, COOKIE_OPTIONS);
 
     res.status(201).json({
@@ -99,7 +94,9 @@ router.post('/register', async (req, res) => {
   }
 });
 
-// POST /api/auth/login - Merchant login
+// ---------------------------------------------------------------------------
+// POST /api/auth/login
+// ---------------------------------------------------------------------------
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -113,20 +110,16 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    const merchant = merchants.get(email);
+    const merchant = await getMerchantByEmail(email);
 
-    if (!merchant) {
-      return res.status(401).json({
-        error: {
-          code: 'INVALID_CREDENTIALS',
-          message: 'Invalid email or password',
-        },
-      });
-    }
+    // Use a constant-time compare regardless of whether the merchant exists
+    // to avoid user-enumeration via timing differences.
+    const dummyHash =
+      '$2b$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ012345';
+    const hashToCompare = merchant ? merchant.passwordHash : dummyHash;
+    const isValid = await bcrypt.compare(password, hashToCompare);
 
-    const isValid = await bcrypt.compare(password, merchant.passwordHash);
-
-    if (!isValid) {
+    if (!merchant || !isValid) {
       return res.status(401).json({
         error: {
           code: 'INVALID_CREDENTIALS',
@@ -138,10 +131,9 @@ router.post('/login', async (req, res) => {
     const token = jwt.sign(
       { merchantId: merchant.id, email: merchant.email, publicKey: merchant.publicKey },
       getConfig().jwtSecret,
-      { expiresIn: '7d' }
+      { expiresIn: '7d' },
     );
 
-    // Set the JWT as an HttpOnly cookie — never exposed to JS
     res.cookie(COOKIE_NAME, token, COOKIE_OPTIONS);
 
     res.json({
@@ -162,7 +154,9 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// POST /api/auth/logout - Clear the auth cookie server-side
+// ---------------------------------------------------------------------------
+// POST /api/auth/logout
+// ---------------------------------------------------------------------------
 router.post('/logout', (_req, res) => {
   res.clearCookie(COOKIE_NAME, { path: '/' });
   res.json({ message: 'Logged out successfully' });

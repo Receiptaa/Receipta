@@ -6,6 +6,7 @@
     "dev": "ts-node src/app.ts",
     "build": "tsc",
     "start": "node dist/app.js",
+    "migrate": "ts-node src/db/migrate.ts",
     "test": "jest --runInBand",
     "test:run": "jest --runInBand --forceExit"
   },

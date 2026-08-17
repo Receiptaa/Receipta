@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { stellarClient } from '../stellar/client';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
-import { merchantReceipts, MerchantReceipt } from './merchant';
+import { createReceipt } from '../db/receipts';
 import logger from '../logger';
 
 const router = Router();
@@ -10,7 +10,7 @@ const router = Router();
 // POST /api/receipts  — authenticated
 //
 // Creates a receipt record by calling the Soroban contract (or simulation),
-// stores the result under the merchant's ID, and returns the new receipt.
+// persists the result to the database, and returns the new receipt.
 //
 // Body:
 //   sender   string  — customer's Stellar public key (G...)
@@ -67,23 +67,20 @@ router.post('/', authenticateToken, async (req: AuthRequest, res) => {
       sender,
       receiver,
       amount,
-      token || 'native'
+      token || 'native',
     );
 
-    // --- Persist in the merchant receipt store ------------------------------
-    const record: MerchantReceipt = {
+    // --- Persist to the database --------------------------------------------
+    const record = await createReceipt({
       id:        receiptId,
+      merchantId,
       amount,
       currency,
       status,
       sender,
       receiver,
       timestamp: Math.floor(Date.now() / 1000),
-    };
-
-    const existing = merchantReceipts.get(merchantId) ?? [];
-    // Prepend so the list is always newest-first
-    merchantReceipts.set(merchantId, [record, ...existing]);
+    });
 
     res.status(201).json({ receipt: record });
   } catch (error) {

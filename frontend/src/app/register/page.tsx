@@ -1,17 +1,59 @@
 'use client';
 
 import { useState } from 'react';
-import { apiUrl } from '@/lib/api';
+import { apiUrl } from '../../lib/api';
+import { StrKey } from '@stellar/stellar-sdk';
+
+export function validateStellarPublicKey(key: string): string {
+  const trimmed = key.trim();
+  if (!trimmed) {
+    return 'Stellar public key is required.';
+  }
+  if (!trimmed.startsWith('G')) {
+    return 'Stellar public key must start with "G".';
+  }
+  if (trimmed.length !== 56) {
+    return 'Stellar public key must be exactly 56 characters long.';
+  }
+  if (!StrKey.isValidEd25519PublicKey(trimmed)) {
+    return 'Invalid Stellar public key format or checksum.';
+  }
+  return '';
+}
 
 export default function RegisterPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [publicKey, setPublicKey] = useState('');
+  const [publicKeyError, setPublicKeyError] = useState('');
+  const [touchedPublicKey, setTouchedPublicKey] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  const handlePublicKeyChange = (value: string) => {
+    setPublicKey(value);
+    if (touchedPublicKey) {
+      setPublicKeyError(validateStellarPublicKey(value));
+    }
+  };
+
+  const handlePublicKeyBlur = () => {
+    setTouchedPublicKey(true);
+    setPublicKeyError(validateStellarPublicKey(publicKey));
+  };
+
+  const isPublicKeyValid = !validateStellarPublicKey(publicKey);
+  const isSubmitDisabled = loading || !email.trim() || !password.trim() || !publicKey.trim() || !isPublicKeyValid;
+
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
+    setTouchedPublicKey(true);
+    const keyErr = validateStellarPublicKey(publicKey);
+    if (keyErr) {
+      setPublicKeyError(keyErr);
+      return;
+    }
+
     setLoading(true);
     setError('');
 
@@ -19,9 +61,8 @@ export default function RegisterPage() {
       const response = await fetch(`${apiUrl}/api/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // credentials: 'include' tells the browser to send/receive cookies cross-origin
         credentials: 'include',
-        body: JSON.stringify({ email, password, publicKey }),
+        body: JSON.stringify({ email, password, publicKey: publicKey.trim() }),
       });
 
       if (!response.ok) {
@@ -29,7 +70,6 @@ export default function RegisterPage() {
         throw new Error(data.error?.message || 'Registration failed');
       }
 
-      // The server sets the HttpOnly cookie; no token in the response body to store
       window.location.href = '/dashboard';
     } catch (err: any) {
       setError(err.message || 'Registration failed');
@@ -94,20 +134,49 @@ export default function RegisterPage() {
               id="register-public-key"
               type="text"
               value={publicKey}
-              onChange={(e) => setPublicKey(e.target.value)}
+              onChange={(e) => handlePublicKeyChange(e.target.value)}
+              onBlur={handlePublicKeyBlur}
               placeholder="G..."
-              className="w-full px-4 py-2 border rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              className={`w-full px-4 py-2 border rounded-lg font-mono text-sm focus:outline-none focus:ring-2 ${
+                touchedPublicKey && publicKeyError
+                  ? 'border-red-500 focus:ring-red-500 focus:border-red-500'
+                  : 'border-gray-300 focus:ring-blue-500 focus:border-blue-500'
+              }`}
               autoComplete="off"
               required
               aria-required="true"
-              aria-describedby="public-key-hint"
+              aria-invalid={touchedPublicKey && Boolean(publicKeyError)}
+              aria-describedby={
+                touchedPublicKey && publicKeyError
+                  ? 'public-key-error public-key-hint'
+                  : 'public-key-hint'
+              }
             />
+            {touchedPublicKey && publicKeyError && (
+              <p
+                id="public-key-error"
+                role="alert"
+                className="text-xs text-red-600 mt-1 font-medium"
+              >
+                {publicKeyError}
+              </p>
+            )}
             <p
               id="public-key-hint"
               className="text-xs text-gray-500 mt-1"
             >
               Your Stellar account public key for receiving payments
             </p>
+            <div className="mt-2 text-xs">
+              <a
+                href="https://developers.stellar.org/docs/learn/fundamentals/stellar-data-structures/accounts"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 hover:underline inline-flex items-center gap-1"
+              >
+                How do I find my Stellar public key?
+              </a>
+            </div>
           </div>
 
           {error && (
@@ -123,9 +192,9 @@ export default function RegisterPage() {
 
           <button
             type="submit"
-            disabled={loading}
-            aria-disabled={loading}
-            className="w-full px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+            disabled={isSubmitDisabled}
+            aria-disabled={isSubmitDisabled}
+            className="w-full px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
           >
             {loading ? 'Registering...' : 'Register'}
           </button>
